@@ -3,10 +3,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <minix/ds.h>
+#include <sys/socket.h>
+#include <sys/ucred.h>
 #include "secret.h"
 
 /*
- * Function prototypes for the hello driver.
+ * Function prototypes for the secret driver.
  */
 FORWARD _PROTOTYPE( char * secret_name,   (void) );
 FORWARD _PROTOTYPE( int secret_open,      (struct driver *d, message *m) );
@@ -29,11 +31,11 @@ PRIVATE struct driver secret_tab =
     secret_name,
     secret_open,
     secret_close,
-    nop_ioctl,
+    secret_ioctl,
     secret_prepare,
     secret_transfer,
     nop_cleanup,
-    secret_geometry,
+    nop_geometry,
     nop_alarm,
     nop_cancel,
     nop_select,
@@ -47,6 +49,13 @@ PRIVATE struct device secret_device;
 /** State variable to count the number of times the device has been opened. */
 PRIVATE int open_counter;
 
+/* Internal buffer where secret is stored */
+/* NULL means empty */
+static char secret[SECRET_SIZE] = NULL;
+
+/* Owner of the secret */
+static uucred owner; 
+
 PRIVATE char * secret_name(void)
 {
     printf("secret_name()\n");
@@ -58,6 +67,27 @@ PRIVATE int secret_open(d, m)
     message *m;
 {
     printf("secret_open(). Called %d time(s).\n", ++open_counter);
+
+    uucred requester;
+    int res;
+    if (secret == NULL) {
+        /* Secret is up for grabs by anyone if its empty */
+        res = getnucred(m->m_source, &owner); /* Assign the owner */
+        if (res != 0) {
+            return -EIO;
+        } 
+        return OK;
+    } 
+
+    res = getnucred(m.m_source, &requester); /* Assign the requester */
+    if (res != 0) {
+        return -EIO;
+    } 
+
+    /* Only the owner can access the secret */
+    if (requester.uid != owner.uid) {
+        return -EACCES;
+    }
     return OK;
 }
 
@@ -110,15 +140,6 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
             return EINVAL;
     }
     return ret;
-}
-
-PRIVATE void secret_geometry(entry)
-    struct partition *entry;
-{
-    printf("secret_geometry()\n");
-    entry->cylinders = 0;
-    entry->heads     = 0;
-    entry->sectors   = 0;
 }
 
 PRIVATE int sef_cb_lu_state_save(int state) {
