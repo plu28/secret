@@ -69,7 +69,7 @@ PRIVATE int secret_open(d, m)
 
     /* Opening with read and write is not permitted */
     if ((flags & R_BIT) && (flags & W_BIT)) {
-        return -EIO;
+        return -EACCES;
     }
 
     uucred requester;
@@ -236,10 +236,13 @@ PRIVATE int sef_cb_init(int type, sef_init_info_t *info)
 /* Initialize the secret driver. */
     int do_announce_driver = TRUE;
 
-    open_counter = 0;
     switch(type) {
         case SEF_INIT_FRESH:
-            printf("%s", secret_MESSAGE);
+            /* Secret is initially NULL */
+            dev_data.secret = NULL;
+            dev_data.read_pos = 0;
+            dev_data.write_pos = 0;
+            dev_data.open_count = 0;
         break;
 
         case SEF_INIT_LU:
@@ -247,11 +250,16 @@ PRIVATE int sef_cb_init(int type, sef_init_info_t *info)
             lu_state_restore();
             do_announce_driver = FALSE;
 
-            printf("%sHey, I'm a new version!\n", secret_MESSAGE);
+            printf("Hey, I'm a new version!\n");
         break;
 
         case SEF_INIT_RESTART:
-            printf("%sHey, I've just been restarted!\n", secret_MESSAGE);
+            /* A restart resets the state of secret to be empty */
+            dev_data.secret = NULL;
+            dev_data.read_pos = 0;
+            dev_data.write_pos = 0;
+            dev_data.open_count = 0;
+            printf("Hey, I've just been restarted!\n");
         break;
     }
 
