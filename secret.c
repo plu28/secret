@@ -74,7 +74,7 @@ PRIVATE int secret_open(d, m)
 
     uucred requester;
     int res;
-    if (secret == NULL) {
+    if (secret == NULL && (flags & W_BIT)) {
         /* Secret is up for grabs by anyone if its empty */
         res = getnucred(m->m_source, &(dev_data->owner)); /* Assign the owner */
         if (res != 0) {
@@ -83,6 +83,11 @@ PRIVATE int secret_open(d, m)
         (dev_data->open_count)++;
         return OK;
     } 
+
+    /* Can only be opened for reading once the secret is owned */
+    if (!(flags & R_BIT)) {
+        return -ENOSPC;
+    }
 
     res = getnucred(m.m_source, &requester); /* Assign the requester */
     if (res != 0) {
@@ -126,8 +131,6 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
     unsigned nr_req;
 {
     int bytes, ret;
-
-    printf("secret_transfer()\n");
 
     bytes = strlen(secret_MESSAGE) - position.lo < iov->iov_size ?
             strlen(secret_MESSAGE) - position.lo : iov->iov_size;
