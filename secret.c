@@ -140,20 +140,49 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
 {
     int bytes, ret;
 
-    bytes = strlen(secret_MESSAGE) - position.lo < iov->iov_size ?
-            strlen(secret_MESSAGE) - position.lo : iov->iov_size;
-
-    if (bytes <= 0)
-    {
-        return OK;
-    }
     switch (opcode)
     {
+        /* Tell the secret up to <bytes> to caller */
         case DEV_GATHER_S:
+
+            /* Takes minimum of requested size and remaining bytes */
+            bytes = dev_data.secret_len - dev_data.read_pos > iov->iov_size ?
+                iov->iov_size : dev_data.secret_len - dev_data.read_pos;
+
+            if (bytes <= 0) 
+            {
+                return OK;
+            }
+
             ret = sys_safecopyto(proc_nr, iov->iov_addr, 0,
-                                (vir_bytes) (secret_MESSAGE + position.lo),
+                                (vir_bytes) (dev_data.secret + dev_data.read_pos),
                                  bytes, D);
-            iov->iov_size -= bytes;
+            if (ret == OK) {
+                iov->iov_size -= bytes;
+                dev_data.read_pos += bytes;
+            }
+            break;
+
+        /* Listen to secret up to <bytes> from caller */
+        case DEV_SCATTER_S:
+            /* Takes minimum of writing size and remaining bytes */
+            bytes = dev_data.secret_len - dev_data.read_pos > iov->iov_size ?
+                iov->iov_size : dev_data.secret_len - dev_data.read_pos;
+
+            if (bytes <= 0) 
+            {
+                return OK;
+            }
+
+            ret = sys_safecopyfrom(proc_nr, iov->iov_addr, 0,
+                                (vir_bytes) (dev_data.secret + dev_data.write_pos),
+                                 bytes, D);
+
+            if (ret == OK) {
+                iov->iov_size -= bytes;
+                dev_data.secret_len += bytes;
+                dev_data.write_pos += bytes;
+            }
             break;
 
         default:

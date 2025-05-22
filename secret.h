@@ -9,9 +9,10 @@
 
 typedef struct dev_data {
   char secret[SECRET_SIZE]; /* Secret buffer */
+  int secret_len; /* Number of bytes written to secret */
   uucred owner; /* Owner of the secret */
-  char *read_ptr; /* Current position of read */
-  char *write_ptr; /* Current position of write */
+  int read_pos; /* Current position of read */
+  int write_pos; /* Current position of write */
   int open_count; /* count of open file descriptors for secret */
 } dev_data;
 
