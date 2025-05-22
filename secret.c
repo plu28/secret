@@ -3,8 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <minix/ds.h>
-#include <sys/socket.h>
-#include <sys/ucred.h>
+#include <sys/ioctl.h>
 #include "secret.h"
 
 /*
@@ -13,15 +12,14 @@
 FORWARD _PROTOTYPE( char * secret_name,   (void) );
 FORWARD _PROTOTYPE( int secret_open,      (struct driver *d, message *m) );
 FORWARD _PROTOTYPE( int secret_close,     (struct driver *d, message *m) );
+FORWARD _PROTOTYPE( int secret_ioctl,      (struct driver *d, message *m) );
 /*
 FORWARD _PROTOTYPE( struct device * secret_prepare, (int device) );
 */
 FORWARD _PROTOTYPE( int secret_transfer,  (int procnr, int opcode,
                                           u64_t position, iovec_t *iov,
                                           unsigned nr_req) );
-/*
-FORWARD _PROTOTYPE( void nop_geometry, (struct partition *entry) );
-*/
+FORWARD _PROTOTYPE( void secret_geometry, (struct partition *entry) );
 
 /* SEF functions and variables. */
 FORWARD _PROTOTYPE( void sef_local_startup, (void) );
@@ -39,7 +37,7 @@ PRIVATE struct driver secret_tab =
     nop_prepare,
     secret_transfer,
     nop_cleanup,
-    nop_geometry,
+    secret_geometry,
     nop_alarm,
     nop_cancel,
     nop_select,
@@ -62,21 +60,23 @@ PRIVATE int secret_ioctl(d, m)
     struct driver *d;
     message *m;
 {
+    int res;
+    int request;
+    uid_t grantee; /* the uid of the new owner of the secret */
     /* Verify right message type is passed */
     if (m->m_type != DEV_IOCTL_S) {
-        return -EIO;
+        return EIO;
     }
-    int request = m->REQUEST;
+    request = m->REQUEST;
 
     switch (request) {
         case SSGRANT:
-            int res;
-            uid_t grantee; /* the uid of the new owner of the secret */
-            res = sys_safecopyfrom(m->IO_ENDPT, (vir_bytes)m->IO_GRANT, 0, (vir_bytes) &grantee, sizeof(grantee, D));
+            res = sys_safecopyfrom(m->IO_ENDPT, (vir_bytes)m->IO_GRANT, 0, (vir_bytes) &grantee, sizeof(grantee), D);
 
             if (res == OK) {
-                dev_data.owner_uid = grantee;
+                secret_data.owner_uid = grantee;
             }
+        break;
 
         default:
             return ENOTTY;
@@ -89,47 +89,49 @@ PRIVATE int secret_open(d, m)
     struct driver *d;
     message *m;
 {
+    int flags;
+    int res;
+    ucred owner; 
+    ucred requester;
+
     /* Verify right message type is passed */
     if (m->m_type != DEV_OPEN) {
-        return -EIO;
+        return EIO;
     }
-    int flags = m->COUNT;
+    flags = m->COUNT;
 
     /* Opening with read and write is not permitted */
     if ((flags & R_BIT) && (flags & W_BIT)) {
-        return -EACCES;
+        return EACCES;
     }
 
-    uucred owner; 
-    uucred requester;
-    int res;
-    if (secret == NULL && (flags & W_BIT)) {
+    if (secret_data.is_empty && (flags & W_BIT)) {
         /* Secret is up for grabs by anyone if its empty */
         res = getnucred(m->m_source, &owner); /* Assign the owner */
         if (res != 0) {
-            return -EIO;
+            return EIO;
         } 
-        dev_data.owner_uid = owner.uid;
-        (dev_data.open_count)++;
+        secret_data.owner_uid = owner.uid;
+        (secret_data.open_count)++;
         return OK;
     } 
 
     /* Can only be opened for reading once the secret is owned */
     if (!(flags & R_BIT)) {
-        return -ENOSPC;
+        return ENOSPC;
     }
 
     res = getnucred(m->m_source, &requester); /* Assign the requester */
     if (res != 0) {
-        return -EIO;
+        return EIO;
     } 
 
     /* Only the owner can access the secret */
-    if (requester.uid != dev_data.owner_uid) {
-        return -EACCES;
+    if (requester.uid != secret_data.owner_uid) {
+        return EACCES;
     }
 
-    (dev_data.open_count)++;
+    (secret_data.open_count)++;
     return OK;
 }
 
@@ -137,16 +139,25 @@ PRIVATE int secret_close(d, m)
     struct driver *d;
     message *m;
 {
-    (dev_data.open_count)--;
+    (secret_data.open_count)--;
 
     /* Reset buffer once all fd's are closed */
-    if (dev_data.open_count == 0) {
-        dev_data.secret = NULL;
-        dev_data.read_ptr = NULL;
-        dev_data.write_ptr = NLUL;
+    if (secret_data.open_count == 0) {
+        secret_data.is_empty = 1;
+        secret_data.read_pos = 0;
+        secret_data.write_pos = 0;
     }
 
     return OK;
+}
+
+PRIVATE void secret_geometry(entry)
+    struct partition *entry;
+{
+    printf("secret_geometry()\n");
+    entry->cylinders = 0;
+    entry->heads     = 0;
+    entry->sectors   = 0;
 }
 
 /*
@@ -176,8 +187,8 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
         case DEV_GATHER_S:
 
             /* Takes minimum of requested size and remaining bytes */
-            bytes = dev_data.write_pos - dev_data.read_pos > iov->iov_size ?
-                iov->iov_size : dev_data.write_pos - dev_data.read_pos;
+            bytes = secret_data.write_pos - secret_data.read_pos > iov->iov_size ?
+                iov->iov_size : secret_data.write_pos - secret_data.read_pos;
 
             if (bytes <= 0) 
             {
@@ -185,19 +196,19 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
             }
 
             ret = sys_safecopyto(proc_nr, iov->iov_addr, 0,
-                                (vir_bytes) (dev_data.secret + dev_data.read_pos),
+                                (vir_bytes) (secret_data.secret + secret_data.read_pos),
                                  bytes, D);
             if (ret == OK) {
                 iov->iov_size -= bytes;
-                dev_data.read_pos += bytes;
+                secret_data.read_pos += bytes;
             }
             break;
 
         /* Listen to secret up to <bytes> from caller */
         case DEV_SCATTER_S:
             /* Takes minimum of writing size and remaining bytes */
-            bytes = SECRET_SIZE - dev_data.write_pos > iov->iov_size ?
-                iov->iov_size : SECRET_SIZE - dev_data.write_pos;
+            bytes = SECRET_SIZE - secret_data.write_pos > iov->iov_size ?
+                iov->iov_size : SECRET_SIZE - secret_data.write_pos;
 
             if (bytes <= 0) 
             {
@@ -205,12 +216,12 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
             }
 
             ret = sys_safecopyfrom(proc_nr, iov->iov_addr, 0,
-                                (vir_bytes) (dev_data.secret + dev_data.write_pos),
+                                (vir_bytes) (secret_data.secret + secret_data.write_pos),
                                  bytes, D);
 
             if (ret == OK) {
                 iov->iov_size -= bytes;
-                dev_data.write_pos += bytes;
+                secret_data.write_pos += bytes;
             }
             break;
 
@@ -222,17 +233,17 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
 
 PRIVATE int sef_cb_lu_state_save(int state) {
 /* Save the state. */
-    ds_publish_mem("dev_data", &dev_data, sizeof(dev_data), DSF_OVERWRITE);
+    ds_publish_mem("secret_data", &secret_data, sizeof(secret_data), DSF_OVERWRITE);
 
     return OK;
 }
 
 PRIVATE int lu_state_restore() {
 /* Restore the state. */
-    size_t len = sizeof(dev_data);
+    size_t len = sizeof(secret_data);
 
-    ds_retrieve_mem("dev_data", (char *)&dev_data, &len);
-    ds_delete_u32("dev_data");
+    ds_retrieve_mem("secret_data", (char *)&secret_data, &len);
+    ds_delete_u32("secret_data");
 
     return OK;
 }
@@ -268,10 +279,10 @@ PRIVATE int sef_cb_init(int type, sef_init_info_t *info)
     switch(type) {
         case SEF_INIT_FRESH:
             /* Secret is initially NULL */
-            dev_data.secret = NULL;
-            dev_data.read_pos = 0;
-            dev_data.write_pos = 0;
-            dev_data.open_count = 0;
+            secret_data.is_empty = 1;
+            secret_data.read_pos = 0;
+            secret_data.write_pos = 0;
+            secret_data.open_count = 0;
         break;
 
         case SEF_INIT_LU:
@@ -284,10 +295,10 @@ PRIVATE int sef_cb_init(int type, sef_init_info_t *info)
 
         case SEF_INIT_RESTART:
             /* A restart resets the state of secret to be empty */
-            dev_data.secret = NULL;
-            dev_data.read_pos = 0;
-            dev_data.write_pos = 0;
-            dev_data.open_count = 0;
+            secret_data.is_empty = 1;
+            secret_data.read_pos = 0;
+            secret_data.write_pos = 0;
+            secret_data.open_count = 0;
             printf("Hey, I've just been restarted!\n");
         break;
     }
