@@ -192,18 +192,17 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
 
 PRIVATE int sef_cb_lu_state_save(int state) {
 /* Save the state. */
-    ds_publish_u32("open_counter", open_counter, DSF_OVERWRITE);
+    ds_publish_mem("dev_data", &dev_data, sizeof(dev_data), DSF_OVERWRITE);
 
     return OK;
 }
 
 PRIVATE int lu_state_restore() {
 /* Restore the state. */
-    u32_t value;
+    size_t len = sizeof(dev_data);
 
-    ds_retrieve_u32("open_counter", &value);
-    ds_delete_u32("open_counter");
-    open_counter = (int) value;
+    ds_retrieve_mem("dev_data", (char *)&dev_data, &len);
+    ds_delete_u32("dev_data");
 
     return OK;
 }
