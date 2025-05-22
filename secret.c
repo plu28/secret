@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <minix/ds.h>
 #include <sys/socket.h>
-#include <sys/ucred.h>
 #include "secret.h"
 
 /*
@@ -13,11 +12,15 @@
 FORWARD _PROTOTYPE( char * secret_name,   (void) );
 FORWARD _PROTOTYPE( int secret_open,      (struct driver *d, message *m) );
 FORWARD _PROTOTYPE( int secret_close,     (struct driver *d, message *m) );
+/*
 FORWARD _PROTOTYPE( struct device * secret_prepare, (int device) );
+*/
 FORWARD _PROTOTYPE( int secret_transfer,  (int procnr, int opcode,
                                           u64_t position, iovec_t *iov,
                                           unsigned nr_req) );
-FORWARD _PROTOTYPE( void secret_geometry, (struct partition *entry) );
+/*
+FORWARD _PROTOTYPE( void nop_geometry, (struct partition *entry) );
+*/
 
 /* SEF functions and variables. */
 FORWARD _PROTOTYPE( void sef_local_startup, (void) );
@@ -32,7 +35,7 @@ PRIVATE struct driver secret_tab =
     secret_open,
     secret_close,
     secret_ioctl,
-    secret_prepare,
+    nop_prepare,
     secret_transfer,
     nop_cleanup,
     nop_geometry,
@@ -46,15 +49,7 @@ PRIVATE struct driver secret_tab =
 /** Represents the /dev/secret device. */
 PRIVATE struct device secret_device;
 
-/** State variable to count the number of times the device has been opened. */
-PRIVATE int open_counter;
-
-/* Internal buffer where secret is stored */
-/* NULL means empty */
-static char secret[SECRET_SIZE] = NULL;
-
-/* Owner of the secret */
-static uucred owner; 
+PRIVATE struct dev_data secret_data;
 
 PRIVATE char * secret_name(void)
 {
@@ -66,16 +61,26 @@ PRIVATE int secret_open(d, m)
     struct driver *d;
     message *m;
 {
-    printf("secret_open(). Called %d time(s).\n", ++open_counter);
+    /* Verify right message type is passed */
+    if (m->m_type != DEV_OPEN) {
+        return -EIO;
+    }
+    int flags = m.m_count;
+
+    /* Opening with read and write is not permitted */
+    if ((flags & R_BIT) && (flags & W_BIT)) {
+        return -EIO;
+    }
 
     uucred requester;
     int res;
     if (secret == NULL) {
         /* Secret is up for grabs by anyone if its empty */
-        res = getnucred(m->m_source, &owner); /* Assign the owner */
+        res = getnucred(m->m_source, &(dev_data->owner)); /* Assign the owner */
         if (res != 0) {
             return -EIO;
         } 
+        (dev_data->open_count)++;
         return OK;
     } 
 
@@ -88,6 +93,8 @@ PRIVATE int secret_open(d, m)
     if (requester.uid != owner.uid) {
         return -EACCES;
     }
+
+    (dev_data->open_count)++;
     return OK;
 }
 
@@ -99,6 +106,7 @@ PRIVATE int secret_close(d, m)
     return OK;
 }
 
+/*
 PRIVATE struct device * secret_prepare(dev)
     int dev;
 {
@@ -108,6 +116,7 @@ PRIVATE struct device * secret_prepare(dev)
     secret_device.dv_size.hi = 0;
     return &secret_device;
 }
+*/
 
 PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
     int proc_nr;
