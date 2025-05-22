@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <minix/ds.h>
 #include <sys/socket.h>
+#include <sys/ucred.h>
 #include "secret.h"
 
 /*
@@ -57,6 +58,33 @@ PRIVATE char * secret_name(void)
     return "secret";
 }
 
+PRIVATE int secret_ioctl(d, m)
+    struct driver *d;
+    message *m;
+{
+    /* Verify right message type is passed */
+    if (m->m_type != DEV_IOCTL_S) {
+        return -EIO;
+    }
+    int request = m->REQUEST;
+
+    switch (request) {
+        case SSGRANT:
+            int res;
+            uid_t grantee; /* the uid of the new owner of the secret */
+            res = sys_safecopyfrom(m->IO_ENDPT, (vir_bytes)m->IO_GRANT, 0, (vir_bytes) &grantee, sizeof(grantee, D));
+
+            if (res == OK) {
+                dev_data.owner_uid = grantee;
+            }
+
+        default:
+            return ENOTTY;
+    }
+
+    return res;
+}
+
 PRIVATE int secret_open(d, m)
     struct driver *d;
     message *m;
@@ -65,21 +93,23 @@ PRIVATE int secret_open(d, m)
     if (m->m_type != DEV_OPEN) {
         return -EIO;
     }
-    int flags = m.m_count;
+    int flags = m->COUNT;
 
     /* Opening with read and write is not permitted */
     if ((flags & R_BIT) && (flags & W_BIT)) {
         return -EACCES;
     }
 
+    uucred owner; 
     uucred requester;
     int res;
     if (secret == NULL && (flags & W_BIT)) {
         /* Secret is up for grabs by anyone if its empty */
-        res = getnucred(m->m_source, &(dev_data.owner)); /* Assign the owner */
+        res = getnucred(m->m_source, &owner); /* Assign the owner */
         if (res != 0) {
             return -EIO;
         } 
+        dev_data.owner_uid = owner.uid;
         (dev_data.open_count)++;
         return OK;
     } 
@@ -89,13 +119,13 @@ PRIVATE int secret_open(d, m)
         return -ENOSPC;
     }
 
-    res = getnucred(m.m_source, &requester); /* Assign the requester */
+    res = getnucred(m->m_source, &requester); /* Assign the requester */
     if (res != 0) {
         return -EIO;
     } 
 
     /* Only the owner can access the secret */
-    if (requester.uid != owner.uid) {
+    if (requester.uid != dev_data.owner_uid) {
         return -EACCES;
     }
 
