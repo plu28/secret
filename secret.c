@@ -146,8 +146,8 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
         case DEV_GATHER_S:
 
             /* Takes minimum of requested size and remaining bytes */
-            bytes = dev_data.secret_len - dev_data.read_pos > iov->iov_size ?
-                iov->iov_size : dev_data.secret_len - dev_data.read_pos;
+            bytes = dev_data.write_pos - dev_data.read_pos > iov->iov_size ?
+                iov->iov_size : dev_data.write_pos - dev_data.read_pos;
 
             if (bytes <= 0) 
             {
@@ -166,8 +166,8 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
         /* Listen to secret up to <bytes> from caller */
         case DEV_SCATTER_S:
             /* Takes minimum of writing size and remaining bytes */
-            bytes = dev_data.secret_len - dev_data.read_pos > iov->iov_size ?
-                iov->iov_size : dev_data.secret_len - dev_data.read_pos;
+            bytes = SECRET_SIZE - dev_data.write_pos > iov->iov_size ?
+                iov->iov_size : SECRET_SIZE - dev_data.write_pos;
 
             if (bytes <= 0) 
             {
@@ -180,7 +180,6 @@ PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
 
             if (ret == OK) {
                 iov->iov_size -= bytes;
-                dev_data.secret_len += bytes;
                 dev_data.write_pos += bytes;
             }
             break;
