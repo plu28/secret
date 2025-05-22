@@ -76,11 +76,11 @@ PRIVATE int secret_open(d, m)
     int res;
     if (secret == NULL && (flags & W_BIT)) {
         /* Secret is up for grabs by anyone if its empty */
-        res = getnucred(m->m_source, &(dev_data->owner)); /* Assign the owner */
+        res = getnucred(m->m_source, &(dev_data.owner)); /* Assign the owner */
         if (res != 0) {
             return -EIO;
         } 
-        (dev_data->open_count)++;
+        (dev_data.open_count)++;
         return OK;
     } 
 
@@ -99,7 +99,7 @@ PRIVATE int secret_open(d, m)
         return -EACCES;
     }
 
-    (dev_data->open_count)++;
+    (dev_data.open_count)++;
     return OK;
 }
 
@@ -107,7 +107,15 @@ PRIVATE int secret_close(d, m)
     struct driver *d;
     message *m;
 {
-    printf("secret_close()\n");
+    (dev_data.open_count)--;
+
+    /* Reset buffer once all fd's are closed */
+    if (dev_data.open_count == 0) {
+        dev_data.secret = NULL;
+        dev_data.read_ptr = NULL;
+        dev_data.write_ptr = NLUL;
+    }
+
     return OK;
 }
 
