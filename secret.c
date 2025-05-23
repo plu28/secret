@@ -1,4 +1,5 @@
 #include "secret.h"
+#include <sys/socket.h>
 #include <minix/driver.h>
 #include <minix/drivers.h>
 #include <minix/ds.h>
@@ -13,9 +14,7 @@ FORWARD _PROTOTYPE(char *secret_name, (void));
 FORWARD _PROTOTYPE(int secret_open, (struct driver * d, message *m));
 FORWARD _PROTOTYPE(int secret_close, (struct driver * d, message *m));
 FORWARD _PROTOTYPE(int secret_ioctl, (struct driver * d, message *m));
-/*
-FORWARD _PROTOTYPE( struct device * secret_prepare, (int device) );
-*/
+FORWARD _PROTOTYPE(struct device *secret_prepare, (int device));
 FORWARD _PROTOTYPE(int secret_transfer, (int procnr, int opcode, u64_t position,
                                          iovec_t *iov, unsigned nr_req));
 FORWARD _PROTOTYPE(void secret_geometry, (struct partition * entry));
@@ -28,7 +27,7 @@ FORWARD _PROTOTYPE(int lu_state_restore, (void));
 
 /* Entry points to the secret driver. */
 PRIVATE struct driver secret_tab = {
-    secret_name,     secret_open, secret_close,    secret_ioctl, nop_prepare,
+    secret_name,     secret_open, secret_close,    secret_ioctl, secret_prepare,
     secret_transfer, nop_cleanup, secret_geometry, nop_alarm,    nop_cancel,
     nop_select,      nop_ioctl,   do_nop,
 };
@@ -109,12 +108,13 @@ message *m;
     return ENOSPC;
   }
 
-  res = getnucred(m->m_source, &requester); /* Assign the requester */
+  res = getnucred(m->IO_ENDPT, &requester); /* Assign the requester */
   if (res != 0) {
     return EIO;
   }
 
   /* Only the owner can access the secret */
+  printf("requester=%ld owner=%ld", requester.uid, secret_data.owner_uid);
   if (requester.uid != secret_data.owner_uid) {
     return EACCES;
   }
@@ -127,10 +127,9 @@ PRIVATE int secret_close(d, m)
 struct driver *d;
 message *m;
 {
-  (secret_data.open_count)--;
-
-  /* Reset buffer once all fd's are closed */
-  if (secret_data.open_count == 0) {
+  /* Reset buffer once all fd's are closed and secret has been read*/
+  if ((secret_data.read_pos == secret_data.write_pos) &&
+      secret_data.open_count == 0) {
     secret_data.is_empty = 1;
     secret_data.read_pos = 0;
     secret_data.write_pos = 0;
@@ -147,17 +146,15 @@ PRIVATE void secret_geometry(entry) struct partition *entry;
   entry->sectors = 0;
 }
 
-/*
-PRIVATE struct device * secret_prepare(dev)
-    int dev;
+PRIVATE struct device *secret_prepare(dev)
+int dev;
 {
-    secret_device.dv_base.lo = 0;
-    secret_device.dv_base.hi = 0;
-    secret_device.dv_size.lo = strlen(secret_MESSAGE);
-    secret_device.dv_size.hi = 0;
-    return &secret_device;
+  secret_device.dv_base.lo = 0;
+  secret_device.dv_base.hi = 0;
+  secret_device.dv_size.lo = sizeof(secret_data);
+  secret_device.dv_size.hi = 0;
+  return &secret_device;
 }
-*/
 
 PRIVATE int secret_transfer(proc_nr, opcode, position, iov, nr_req)
 int proc_nr;
@@ -173,7 +170,7 @@ unsigned nr_req;
   case DEV_GATHER_S:
 
     /* Takes minimum of requested size and remaining bytes */
-    bytes = secret_data.write_pos - secret_data.read_pos > iov->iov_size
+    bytes = (secret_data.write_pos - secret_data.read_pos) > iov->iov_size
                 ? iov->iov_size
                 : secret_data.write_pos - secret_data.read_pos;
 
@@ -193,7 +190,7 @@ unsigned nr_req;
   /* Listen to secret up to <bytes> from caller */
   case DEV_SCATTER_S:
     /* Takes minimum of writing size and remaining bytes */
-    bytes = SECRET_SIZE - secret_data.write_pos > iov->iov_size
+    bytes = (SECRET_SIZE - secret_data.write_pos) > iov->iov_size
                 ? iov->iov_size
                 : SECRET_SIZE - secret_data.write_pos;
 
@@ -214,7 +211,7 @@ unsigned nr_req;
   default:
     return EINVAL;
   }
-  return ret;
+  return bytes;
 }
 
 PRIVATE int sef_cb_lu_state_save(int state) {

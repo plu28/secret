@@ -1,0 +1,5 @@
+David Voronov (voronov)
+
+Changes made to Minix:
+- Modified system.conf to add secret driver
+- Modified header for ioctl in both sys/ioctl.h and minix/ioctl.h to include SSGRANT for secret
